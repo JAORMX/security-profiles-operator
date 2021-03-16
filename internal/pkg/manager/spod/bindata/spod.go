@@ -33,6 +33,7 @@ var (
 	hostPathFile                    = v1.HostPathFile
 	hostPathDirectory               = v1.HostPathDirectory
 	hostPathDirectoryOrCreate       = v1.HostPathDirectoryOrCreate
+	selinuxdSeccompProfile          = "selinuxd.json"
 )
 
 const (
@@ -76,8 +77,8 @@ var Manifest = &appsv1.DaemonSet{
 								MountPath: "/var/lib",
 							},
 							{
-								Name:      "operator-seccomp-profile-volume",
-								MountPath: "/opt/seccomp-profiles",
+								Name:      "operator-profiles-volume",
+								MountPath: "/opt/spo-profiles",
 								ReadOnly:  true,
 							},
 						},
@@ -131,11 +132,30 @@ var Manifest = &appsv1.DaemonSet{
 						chown 65535:0 /etc/selinux.d
 						chmod 750 /etc/selinux.d
 						cp /usr/share/udica/templates/* /etc/selinux.d
+						cp /opt/spo-profiles/*.cil /etc/selinux.d
+						semodule -i /etc/selinux.d/*.cil
 					`},
 						VolumeMounts: []v1.VolumeMount{
 							{
 								Name:      "selinux-drop-dir",
 								MountPath: SelinuxDropDirectory,
+							},
+							{
+								Name:      "operator-profiles-volume",
+								MountPath: "/opt/spo-profiles",
+								ReadOnly:  true,
+							},
+							{
+								Name:      "host-fsselinux-volume",
+								MountPath: "/sys/fs/selinux",
+							},
+							{
+								Name:      "host-etcselinux-volume",
+								MountPath: "/etc/selinux",
+							},
+							{
+								Name:      "host-varlibselinux-volume",
+								MountPath: "/var/lib/selinux",
 							},
 						},
 						SecurityContext: &v1.SecurityContext{
@@ -158,7 +178,8 @@ var Manifest = &appsv1.DaemonSet{
 								v1.ResourceEphemeralStorage: resource.MustParse("10Mi"),
 							},
 							Limits: v1.ResourceList{
-								v1.ResourceMemory:           resource.MustParse("64Mi"),
+								// libsemanage is very resource hungry...
+								v1.ResourceMemory:           resource.MustParse("1024Mi"),
 								v1.ResourceCPU:              resource.MustParse("250m"),
 								v1.ResourceEphemeralStorage: resource.MustParse("50Mi"),
 							},
@@ -263,11 +284,12 @@ var Manifest = &appsv1.DaemonSet{
 							RunAsUser:              &userRoot,
 							RunAsGroup:             &userRoot,
 							SELinuxOptions: &v1.SELinuxOptions{
-								// TODO(jaosorior): Use a more restricted selinux type
-								Type: "spc_t",
+								Type: "selinuxd.process",
 							},
-							/* TODO(jhrozek) is this really needed? */
-							Privileged: &truly,
+							SeccompProfile: &v1.SeccompProfile{
+								Type:             v1.SeccompProfileTypeLocalhost,
+								LocalhostProfile: &selinuxdSeccompProfile,
+							},
 						},
 						Resources: v1.ResourceRequirements{
 							Requests: v1.ResourceList{
@@ -348,7 +370,7 @@ var Manifest = &appsv1.DaemonSet{
 						},
 					},
 					{
-						Name: "operator-seccomp-profile-volume",
+						Name: "operator-profiles-volume",
 						VolumeSource: v1.VolumeSource{
 							ConfigMap: &v1.ConfigMapVolumeSource{
 								LocalObjectReference: v1.LocalObjectReference{
